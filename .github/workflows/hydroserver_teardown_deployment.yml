@@ -1,0 +1,200 @@
+name: Teardown HydroServer Deployment
+run-name: Teardown · ${{ inputs.environment }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Enter an environment to teardown.'
+        type: environment
+        required: true
+      confirm_environment:
+        description: 'Type the environment name again to confirm.'
+        type: string
+        required: true
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: hydroserver-deploy-${{ inputs.environment }}
+  cancel-in-progress: false
+
+jobs:
+  validate-hs-deployment-environment:
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.environment }}
+    env:
+      SOURCE_ENVIRONMENT: ${{ vars.SOURCE_ENVIRONMENT }}
+      PROXY_BASE_URL: ${{ vars.PROXY_BASE_URL }}
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      AWS_ACCOUNT_ID: ${{ vars.AWS_ACCOUNT_ID }}
+      AWS_ROLE_ARN: ${{ vars.AWS_ROLE_ARN }}
+      CLOUDFRONT_CERTIFICATE_ARN: ${{ vars.CLOUDFRONT_CERTIFICATE_ARN }}
+      TERRAFORM_BUCKET: ${{ vars.TERRAFORM_BUCKET }}
+      PREVENT_DATA_DELETION: ${{ vars.PREVENT_DATA_DELETION }}
+    outputs:
+      source_environment: ${{ steps.fetch-source-environment.outputs.source_environment }}
+    steps:
+      - name: Confirm environment
+        shell: bash
+        env:
+          SELECTED_ENVIRONMENT: ${{ inputs.environment }}
+          TYPED_ENVIRONMENT: ${{ inputs.confirm_environment }}
+        run: |
+          if [ "$SELECTED_ENVIRONMENT" != "$TYPED_ENVIRONMENT" ]; then
+            echo "❌ Typed environment '$TYPED_ENVIRONMENT' doesn't match selected environment '$SELECTED_ENVIRONMENT'."
+            exit 1
+          fi
+          echo "✅ Environment confirmed: $SELECTED_ENVIRONMENT"
+
+      - name: Check required environment variables
+        shell: bash
+        run: |
+          echo "Checking required environment variables..."
+          missing=false
+          required_variables=(
+            PROXY_BASE_URL
+            AWS_REGION
+            AWS_ACCOUNT_ID
+            AWS_ROLE_ARN
+            CLOUDFRONT_CERTIFICATE_ARN
+            TERRAFORM_BUCKET
+            PREVENT_DATA_DELETION
+          )
+          for var in "${required_variables[@]}"; do
+            if [ -z "${!var}" ]; then
+              echo "❌ Error: $var is not defined."
+              missing=true
+            else
+              echo "✅ $var is set."
+            fi
+          done
+          if [ "$missing" = true ]; then
+            exit 1
+          fi
+
+      - name: Check PREVENT_DATA_DELETION
+        run: |
+          if [ "$PREVENT_DATA_DELETION" != "false" ]; then
+            echo "❌ PREVENT_DATA_DELETION is set to '$PREVENT_DATA_DELETION'. Aborting teardown."
+            exit 1
+          else
+            echo "✅ PREVENT_DATA_DELETION is false. Proceeding."
+          fi
+
+      - name: Get source environment name
+        id: fetch-source-environment
+        shell: bash
+        run: |
+          echo "source_environment=$SOURCE_ENVIRONMENT" >> $GITHUB_OUTPUT
+
+  load-hs-source-environment:
+    needs: validate-hs-deployment-environment
+    if: ${{ needs.validate-hs-deployment-environment.outputs.source_environment != '' }}
+    runs-on: ubuntu-latest
+    environment: ${{ needs.validate-hs-deployment-environment.outputs.source_environment }}
+    env:
+      AWS_ACCOUNT_ID: ${{ vars.AWS_ACCOUNT_ID }}
+    outputs:
+      source_account_id: ${{ steps.get-source-account.outputs.source_account_id }}
+    steps:
+      - name: Collect Source Environment Variables
+        shell: bash
+        env:
+          SOURCE_VARS_JSON: ${{ toJSON(vars) }}
+        run: echo "$SOURCE_VARS_JSON" | jq 'del(.NOTIFICATION_EMAILS)' > source-vars.json
+
+      - name: Upload Variables Artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: source-vars-json
+          path: source-vars.json
+
+      - name: Set Source Account ID Output
+        id: get-source-account
+        shell: bash
+        run: |
+          echo "source_account_id=${AWS_ACCOUNT_ID}" >> "$GITHUB_OUTPUT"
+
+  teardown-hs-deployment:
+    needs: [validate-hs-deployment-environment, load-hs-source-environment]
+    if: >
+      always() &&
+      needs.validate-hs-deployment-environment.result == 'success' &&
+      (needs.load-hs-source-environment.result == 'success' || needs.load-hs-source-environment.result == 'skipped')
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.environment }}
+    env:
+      TF_VAR_smtp_url: ${{ secrets.SMTP_URL }}
+    defaults:
+      run:
+        working-directory: ./terraform
+    steps:
+      - name: Checkout Deployment Repository
+        uses: actions/checkout@v7
+
+      - name: Download Source Variables
+        uses: actions/download-artifact@v8
+        with:
+          name: source-vars-json
+          path: ./terraform/source-vars
+        continue-on-error: true
+
+      - name: Generate variables.tfvars
+        uses: ./.github/actions/render-tfvars
+        with:
+          environment: ${{ github.event.inputs.environment }}
+          target-vars-json: ${{ toJSON(vars) }}
+          fallback-vars-path: ./terraform/source-vars/source-vars.json
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+          role-duration-seconds: 7200
+
+      - name: Empty Static and Media Buckets
+        run: |
+          set -e
+          BUCKETS=(
+            "hs-static-${{ github.event.inputs.environment }}-${{ vars.AWS_ACCOUNT_ID }}"
+            "hs-media-${{ github.event.inputs.environment }}-${{ vars.AWS_ACCOUNT_ID }}"
+          )
+
+          for BUCKET in "${BUCKETS[@]}"; do
+            echo "Emptying bucket: ${BUCKET}"
+            if aws s3api head-bucket --bucket "${BUCKET}" >/dev/null 2>&1; then
+              aws s3 rm "s3://${BUCKET}" --recursive || true
+              echo "✅ Bucket ${BUCKET} emptied."
+            else
+              echo "⚠️Bucket ${BUCKET} does not exist, skipping."
+            fi
+          done
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: 1.16.7
+
+      - name: Initialize Terraform
+        run: |
+          terraform init \
+          -backend-config="bucket=${{ vars.TERRAFORM_BUCKET }}" \
+          -backend-config="key=state/hydroserver_${{ github.event.inputs.environment }}/terraform.tfstate" \
+          -backend-config="region=${{ vars.AWS_REGION }}" \
+          -backend-config="use_lockfile=true"
+
+      - name: Plan HydroServer Teardown
+        id: plan-teardown
+        run: terraform plan -destroy -no-color -input=false -var-file=variables.tfvars
+        continue-on-error: true
+
+      - name: Check Teardown Plan Result
+        if: steps.plan-teardown.outcome == 'failure'
+        run: exit 1
+
+      - name: Teardown HydroServer Deployment
+        run: terraform destroy -auto-approve -input=false -var-file=variables.tfvars

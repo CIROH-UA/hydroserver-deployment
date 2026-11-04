@@ -1,0 +1,92 @@
+name: 'Run HydroServer ECS Task'
+description: >
+  Runs a command in the hs-init-<environment> ECS task definition, waits for it
+  to finish, prints its logs, and fails if the command fails.
+inputs:
+  environment:
+    description: 'The HydroServer environment to run the command in.'
+    required: true
+  command:
+    description: 'JSON array of the command to run, e.g. ["python", "manage.py", "migrate"].'
+    required: true
+  env-json:
+    description: 'JSON object of additional environment variables for the command. Optional.'
+    required: false
+    default: '{}'
+  timeout-minutes:
+    description: 'How long to wait for the command to finish.'
+    required: false
+    default: '120'
+runs:
+  using: 'composite'
+  steps:
+    - name: Run ECS task
+      shell: bash
+      env:
+        ENVIRONMENT: ${{ inputs.environment }}
+        COMMAND_JSON: ${{ inputs.command }}
+        ENV_JSON: ${{ inputs.env-json }}
+        TIMEOUT_MINUTES: ${{ inputs.timeout-minutes }}
+      run: |
+        set -euo pipefail
+        CLUSTER="hs-${ENVIRONMENT}"
+        LOG_GROUP="/ecs/hs-${ENVIRONMENT}"
+
+        NETWORK="$(aws ecs describe-services \
+          --cluster "$CLUSTER" \
+          --services "hs-web-${ENVIRONMENT}" \
+          --query 'services[0].networkConfiguration' \
+          --output json)"
+        if [[ -z "$NETWORK" || "$NETWORK" == "null" ]]; then
+          echo "❌ Couldn't find the hs-web-${ENVIRONMENT} service in cluster ${CLUSTER}. Has this environment been deployed?"
+          exit 1
+        fi
+
+        OVERRIDES="$(jq -cn \
+          --argjson command "$COMMAND_JSON" \
+          --argjson env "$ENV_JSON" \
+          '{containerOverrides: [{name: "hydroserver", command: $command, environment: ($env | to_entries | map({name: .key, value: .value}))}]}')"
+
+        TASK_ARN="$(aws ecs run-task \
+          --cluster "$CLUSTER" \
+          --task-definition "hs-init-${ENVIRONMENT}" \
+          --launch-type FARGATE \
+          --network-configuration "$NETWORK" \
+          --overrides "$OVERRIDES" \
+          --started-by "github-${GITHUB_RUN_ID}" \
+          --query 'tasks[0].taskArn' \
+          --output text)"
+        if [[ -z "$TASK_ARN" || "$TASK_ARN" == "None" ]]; then
+          echo "❌ ECS didn't start the task."
+          exit 1
+        fi
+        TASK_ID="${TASK_ARN##*/}"
+        echo "Started task ${TASK_ID}. Waiting for it to finish..."
+
+        DEADLINE=$(( $(date +%s) + TIMEOUT_MINUTES * 60 ))
+        while true; do
+          STATUS="$(aws ecs describe-tasks --cluster "$CLUSTER" --tasks "$TASK_ARN" --query 'tasks[0].lastStatus' --output text)"
+          [[ "$STATUS" == "STOPPED" ]] && break
+          if (( $(date +%s) >= DEADLINE )); then
+            echo "❌ Task ${TASK_ID} didn't finish within ${TIMEOUT_MINUTES} minutes. Stopping it."
+            aws ecs stop-task --cluster "$CLUSTER" --task "$TASK_ARN" --reason "GitHub Actions timeout" >/dev/null
+            exit 1
+          fi
+          sleep 15
+        done
+
+        echo "::group::Task logs"
+        aws logs tail "$LOG_GROUP" \
+          --log-stream-names "init/hydroserver/${TASK_ID}" \
+          --since 1d \
+          --format short || echo "⚠️ Couldn't read the task logs from ${LOG_GROUP}."
+        echo "::endgroup::"
+
+        EXIT_CODE="$(aws ecs describe-tasks --cluster "$CLUSTER" --tasks "$TASK_ARN" \
+          --query "tasks[0].containers[?name=='hydroserver'] | [0].exitCode" --output text)"
+        if [[ "$EXIT_CODE" != "0" ]]; then
+          REASON="$(aws ecs describe-tasks --cluster "$CLUSTER" --tasks "$TASK_ARN" --query 'tasks[0].stoppedReason' --output text)"
+          echo "❌ Task ${TASK_ID} failed with exit code ${EXIT_CODE}: ${REASON}"
+          exit 1
+        fi
+        echo "✅ Task ${TASK_ID} finished."

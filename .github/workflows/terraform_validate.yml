@@ -1,0 +1,41 @@
+name: Validate Terraform
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+    paths:
+      - 'terraform/**'
+      - '.github/workflows/terraform_validate.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: terraform-validate-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./terraform
+    steps:
+      - name: Checkout Deployment Repository
+        uses: actions/checkout@v7
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: 1.16.7
+
+      - name: Check Formatting
+        run: terraform fmt -check -recursive -diff
+
+      - name: Initialize Terraform
+        run: terraform init -backend=false -input=false -lockfile=readonly
+
+      - name: Validate Terraform
+        run: terraform validate

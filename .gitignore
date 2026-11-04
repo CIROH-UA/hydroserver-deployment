@@ -75,3 +75,14 @@ bower_components/
 .grunt/
 src/vendor/
 dist/
+
+# IDE #
+#######
+.idea
+
+# Terraform #
+#############
+.terraform/
+terraform.tf*
+*.tfvars
+terraform/source-vars/

@@ -1,0 +1,72 @@
+name: Create HydroServer Admin Account
+run-name: Admin account · ${{ inputs.environment }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Enter an environment to create the account for.'
+        type: environment
+        required: true
+      email:
+        description: 'Admin email. New accounts set their password using the Reset Password page. Existing accounts are promoted to admin.'
+        type: string
+        required: true
+      first_name:
+        description: 'First name (new accounts only)'
+        type: string
+        required: false
+        default: 'HydroServer'
+      last_name:
+        description: 'Last name (new accounts only)'
+        type: string
+        required: false
+        default: 'Admin'
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  create-admin-account:
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.environment }}
+    steps:
+      - name: Checkout Deployment Repository
+        uses: actions/checkout@v7
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Validate Account Details
+        id: account
+        shell: bash
+        env:
+          EMAIL: ${{ inputs.email }}
+          FIRST_NAME: ${{ inputs.first_name }}
+          LAST_NAME: ${{ inputs.last_name }}
+        run: |
+          EMAIL="$(printf '%s' "$EMAIL" | tr '[:upper:]' '[:lower:]' | xargs)"
+          if [[ ! "$EMAIL" =~ ^[^@[:space:],]+@[^@[:space:],]+\.[^@[:space:],]+$ ]]; then
+            echo "❌ '$EMAIL' isn't a valid email address."
+            exit 1
+          fi
+          if [[ -z "$FIRST_NAME" || -z "$LAST_NAME" ]]; then
+            echo "❌ First and last name are required."
+            exit 1
+          fi
+
+          echo "command=$(jq -cn --rawfile script .github/scripts/ensure_admin.py '["python", "manage.py", "shell", "-c", $script]')" >> "$GITHUB_OUTPUT"
+          echo "env=$(jq -cn --arg email "$EMAIL" --arg first "$FIRST_NAME" --arg last "$LAST_NAME" \
+            '{ADMIN_EMAIL: $email, ADMIN_FIRST_NAME: $first, ADMIN_LAST_NAME: $last}')" >> "$GITHUB_OUTPUT"
+          echo "Creating or promoting admin account: $EMAIL"
+
+      - name: Create or Promote Admin Account
+        uses: ./.github/actions/run-ecs-task
+        with:
+          environment: ${{ inputs.environment }}
+          command: ${{ steps.account.outputs.command }}
+          env-json: ${{ steps.account.outputs.env }}

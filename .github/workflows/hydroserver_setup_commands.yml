@@ -1,0 +1,66 @@
+name: Run HydroServer Setup Commands
+run-name: Management commands · ${{ inputs.environment }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Enter an environment to run setup commands for.'
+        type: environment
+        required: true
+      migrate:
+        description: 'Apply database migrations'
+        required: false
+        default: false
+        type: boolean
+      collectstatic:
+        description: 'Collect static files'
+        required: false
+        default: false
+        type: boolean
+  workflow_call:
+    inputs:
+      environment:
+        type: string
+        required: true
+      migrate:
+        type: boolean
+        required: false
+        default: false
+      collectstatic:
+        type: boolean
+        required: false
+        default: false
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  run-commands:
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    steps:
+      - name: Checkout Deployment Repository
+        uses: actions/checkout@v7
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+          role-duration-seconds: 7200
+
+      - name: Run migrate
+        if: inputs.migrate
+        uses: ./.github/actions/run-ecs-task
+        with:
+          environment: ${{ inputs.environment }}
+          command: '["python", "manage.py", "migrate"]'
+
+      - name: Run collectstatic
+        if: inputs.collectstatic
+        uses: ./.github/actions/run-ecs-task
+        with:
+          environment: ${{ inputs.environment }}
+          command: '["python", "manage.py", "collectstatic", "--noinput"]'

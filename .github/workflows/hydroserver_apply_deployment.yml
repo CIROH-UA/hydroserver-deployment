@@ -1,0 +1,308 @@
+name: Apply HydroServer Deployment
+run-name: Deploy · ${{ inputs.environment }} · ${{ inputs.mode }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Enter an environment to deploy to.'
+        type: environment
+        required: true
+      mode:
+        description: 'Run "plan" first and review it, then run "apply" with the plan run ID.'
+        type: choice
+        options:
+          - plan
+          - apply
+        default: plan
+      plan_run_id:
+        description: 'Run ID of the plan to apply (apply only). Shown at the top of the plan run summary.'
+        type: string
+        required: false
+      migrate:
+        description: 'After apply: run database migrations'
+        type: boolean
+        required: false
+        default: true
+      collectstatic:
+        description: 'After apply: collect static files'
+        type: boolean
+        required: false
+        default: true
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: hydroserver-deploy-${{ inputs.environment }}
+  cancel-in-progress: false
+
+jobs:
+  validate-hs-deployment-environment:
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    env:
+      SOURCE_ENVIRONMENT: ${{ vars.SOURCE_ENVIRONMENT }}
+      PROXY_BASE_URL: ${{ vars.PROXY_BASE_URL }}
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      AWS_ACCOUNT_ID: ${{ vars.AWS_ACCOUNT_ID }}
+      AWS_ROLE_ARN: ${{ vars.AWS_ROLE_ARN }}
+      CLOUDFRONT_CERTIFICATE_ARN: ${{ vars.CLOUDFRONT_CERTIFICATE_ARN }}
+      TERRAFORM_BUCKET: ${{ vars.TERRAFORM_BUCKET }}
+    outputs:
+      source_environment: ${{ steps.fetch-source-environment.outputs.source_environment }}
+    steps:
+      - name: Check plan run ID
+        if: inputs.mode == 'apply'
+        shell: bash
+        env:
+          PLAN_RUN_ID: ${{ inputs.plan_run_id }}
+        run: |
+          if [ -z "$PLAN_RUN_ID" ]; then
+            echo "❌ No plan run ID given. Run this workflow with mode 'plan' first, review the plan, then run it with mode 'apply' and the plan's run ID."
+            exit 1
+          fi
+          if [[ ! "$PLAN_RUN_ID" =~ ^[0-9]+$ ]]; then
+            echo "❌ '$PLAN_RUN_ID' isn't a valid run ID. Copy the numeric run ID shown at the top of the plan run summary."
+            exit 1
+          fi
+          echo "✅ Applying the plan from run $PLAN_RUN_ID."
+
+      - name: Check required environment variables
+        shell: bash
+        run: |
+          echo "Checking required environment variables..."
+          missing=false
+          required_variables=(
+            PROXY_BASE_URL
+            AWS_REGION
+            AWS_ACCOUNT_ID
+            AWS_ROLE_ARN
+            CLOUDFRONT_CERTIFICATE_ARN
+            TERRAFORM_BUCKET
+          )
+          for var in "${required_variables[@]}"; do
+            if [ -z "${!var}" ]; then
+              echo "❌ Error: $var is not defined."
+              missing=true
+            else
+              echo "✅ $var is set."
+            fi
+          done
+          if [ "$missing" = true ]; then
+            exit 1
+          fi
+
+      - name: Get source environment name
+        id: fetch-source-environment
+        shell: bash
+        run: |
+          echo "source_environment=$SOURCE_ENVIRONMENT" >> $GITHUB_OUTPUT
+
+  load-hs-source-environment:
+    needs: validate-hs-deployment-environment
+    if: ${{ inputs.mode == 'plan' && needs.validate-hs-deployment-environment.outputs.source_environment != '' }}
+    runs-on: ubuntu-latest
+    environment: ${{ needs.validate-hs-deployment-environment.outputs.source_environment }}
+    env:
+      AWS_ACCOUNT_ID: ${{ vars.AWS_ACCOUNT_ID }}
+    outputs:
+      source_account_id: ${{ steps.get-source-account.outputs.source_account_id }}
+    steps:
+      - name: Collect Source Environment Variables
+        shell: bash
+        env:
+          SOURCE_VARS_JSON: ${{ toJSON(vars) }}
+        run: echo "$SOURCE_VARS_JSON" | jq 'del(.NOTIFICATION_EMAILS)' > source-vars.json
+
+      - name: Upload Variables Artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: source-vars-json
+          path: source-vars.json
+
+      - name: Set Source Account ID Output
+        id: get-source-account
+        shell: bash
+        run: |
+          echo "source_account_id=${AWS_ACCOUNT_ID}" >> "$GITHUB_OUTPUT"
+
+  plan-hs-deployment:
+    needs: [validate-hs-deployment-environment, load-hs-source-environment]
+    if: >
+      always() &&
+      inputs.mode == 'plan' &&
+      needs.validate-hs-deployment-environment.result == 'success' &&
+      (needs.load-hs-source-environment.result == 'success' || needs.load-hs-source-environment.result == 'skipped')
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    env:
+      TF_VAR_smtp_url: ${{ secrets.SMTP_URL }}
+    defaults:
+      run:
+        working-directory: ./terraform
+    steps:
+      - name: Checkout Deployment Repository
+        uses: actions/checkout@v7
+
+      - name: Download Source Variables Artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: source-vars-json
+          path: ./terraform/source-vars
+        continue-on-error: true
+
+      - name: Generate variables.tfvars
+        uses: ./.github/actions/render-tfvars
+        with:
+          environment: ${{ inputs.environment }}
+          target-vars-json: ${{ toJSON(vars) }}
+          fallback-vars-path: ./terraform/source-vars/source-vars.json
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: 1.16.7
+
+      - name: Initialize Terraform
+        run: |
+          terraform init \
+          -backend-config="bucket=${{ vars.TERRAFORM_BUCKET }}" \
+          -backend-config="key=state/hydroserver_${{ inputs.environment }}/terraform.tfstate" \
+          -backend-config="region=${{ vars.AWS_REGION }}" \
+          -backend-config="use_lockfile=true"
+
+      - name: Plan HydroServer Deployment
+        run: terraform plan -no-color -input=false -var-file=variables.tfvars -out=tfplan
+
+      - name: Save Plan
+        shell: bash
+        env:
+          ENV: ${{ inputs.environment }}
+          TERRAFORM_BUCKET: ${{ vars.TERRAFORM_BUCKET }}
+        run: |
+          set -e
+          jq -n \
+            --arg sha "$GITHUB_SHA" \
+            --arg ref "$GITHUB_REF_NAME" \
+            --arg environment "$ENV" \
+            --arg run_id "$GITHUB_RUN_ID" \
+            --arg created "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            '{sha: $sha, ref: $ref, environment: $environment, run_id: $run_id, created: $created}' > meta.json
+          PLAN_PREFIX="s3://${TERRAFORM_BUCKET}/plans/${ENV}/${GITHUB_RUN_ID}"
+          aws s3 cp tfplan "${PLAN_PREFIX}/tfplan"
+          aws s3 cp meta.json "${PLAN_PREFIX}/meta.json"
+          echo "✅ Saved plan to ${PLAN_PREFIX}/"
+
+      - name: Write Plan Summary
+        shell: bash
+        env:
+          ENV: ${{ inputs.environment }}
+        run: |
+          terraform show -no-color tfplan > plan.txt
+          RESULT="$(grep -E '^(Plan: |No changes\.)' plan.txt | tail -1)"
+          {
+            echo "## Terraform plan for \`${ENV}\`"
+            echo
+            echo "**Plan run ID: \`${GITHUB_RUN_ID}\`**"
+            echo
+            echo "Branch \`${GITHUB_REF_NAME}\` · commit \`${GITHUB_SHA::7}\` · ${RESULT:-see plan below}"
+            echo
+            echo "To apply this exact plan, run *Apply HydroServer Deployment* on branch \`${GITHUB_REF_NAME}\` with"
+            echo "environment \`${ENV}\`, mode \`apply\`, and plan run ID \`${GITHUB_RUN_ID}\`. Plans are kept for 14 days,"
+            echo "and Terraform rejects a plan if anything has been applied to this environment since it was made."
+            echo
+            echo '<details><summary>Full plan</summary>'
+            echo
+            echo '```'
+            cat plan.txt
+            echo '```'
+            echo
+            echo '</details>'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  apply-hs-deployment:
+    needs: validate-hs-deployment-environment
+    if: inputs.mode == 'apply'
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    env:
+      ENV: ${{ inputs.environment }}
+      PLAN_RUN_ID: ${{ inputs.plan_run_id }}
+      TERRAFORM_BUCKET: ${{ vars.TERRAFORM_BUCKET }}
+    steps:
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+          role-duration-seconds: 7200
+
+      - name: Download Saved Plan
+        id: saved-plan
+        shell: bash
+        run: |
+          PLAN_DIR="${RUNNER_TEMP}/saved-plan"
+          mkdir -p "$PLAN_DIR"
+          PLAN_PREFIX="s3://${TERRAFORM_BUCKET}/plans/${ENV}/${PLAN_RUN_ID}"
+          if ! aws s3 cp "${PLAN_PREFIX}/tfplan" "$PLAN_DIR/tfplan" || ! aws s3 cp "${PLAN_PREFIX}/meta.json" "$PLAN_DIR/meta.json"; then
+            echo "❌ No saved plan for run ${PLAN_RUN_ID} in environment '${ENV}'. Check the run ID and environment."
+            echo "   Plans are deleted after 14 days. If it's older than that, run mode 'plan' again."
+            exit 1
+          fi
+
+          PLAN_ENV="$(jq -r .environment "$PLAN_DIR/meta.json")"
+          PLAN_REF="$(jq -r .ref "$PLAN_DIR/meta.json")"
+          PLAN_SHA="$(jq -r .sha "$PLAN_DIR/meta.json")"
+
+          if [ "$PLAN_ENV" != "$ENV" ]; then
+            echo "❌ Plan ${PLAN_RUN_ID} was made for environment '${PLAN_ENV}', not '${ENV}'."
+            exit 1
+          fi
+          if [ "$PLAN_REF" != "$GITHUB_REF_NAME" ]; then
+            echo "❌ Plan ${PLAN_RUN_ID} was made on branch '${PLAN_REF}', but this run is on '${GITHUB_REF_NAME}'."
+            echo "   Run apply from '${PLAN_REF}', or run mode 'plan' again on '${GITHUB_REF_NAME}'."
+            exit 1
+          fi
+
+          echo "✅ Found plan ${PLAN_RUN_ID} for '${ENV}' from branch '${PLAN_REF}' at commit ${PLAN_SHA::7}."
+          echo "sha=${PLAN_SHA}" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout Plan Commit
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ steps.saved-plan.outputs.sha }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: 1.16.7
+
+      - name: Initialize Terraform
+        working-directory: ./terraform
+        run: |
+          terraform init \
+          -backend-config="bucket=${{ vars.TERRAFORM_BUCKET }}" \
+          -backend-config="key=state/hydroserver_${{ inputs.environment }}/terraform.tfstate" \
+          -backend-config="region=${{ vars.AWS_REGION }}" \
+          -backend-config="use_lockfile=true"
+
+      - name: Apply Saved Plan
+        working-directory: ./terraform
+        run: terraform apply -no-color -input=false "${RUNNER_TEMP}/saved-plan/tfplan"
+
+  manage-hs-deployment:
+    needs: apply-hs-deployment
+    if: needs.apply-hs-deployment.result == 'success' && (inputs.migrate || inputs.collectstatic)
+    uses: ./.github/workflows/hydroserver_setup_commands.yml
+    with:
+      environment: ${{ inputs.environment }}
+      migrate: ${{ inputs.migrate }}
+      collectstatic: ${{ inputs.collectstatic }}

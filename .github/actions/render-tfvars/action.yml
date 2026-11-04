@@ -1,0 +1,63 @@
+name: 'Render variables.tfvars'
+description: >
+  Creates terraform/variables.tfvars from environment vars (with an optional
+  source-environment fallback), using variable names from terraform/main.tf.
+inputs:
+  environment:
+    description: 'Value to write as the "environment" tfvars entry.'
+    required: true
+  target-vars-json:
+    description: 'JSON object of the target environment vars.'
+    required: true
+  fallback-vars-path:
+    description: 'Path to a JSON file of fallback (source environment) vars. Optional.'
+    required: false
+    default: ''
+  main-tf-path:
+    description: 'Path to the Terraform file declaring the canonical variable list.'
+    required: false
+    default: 'terraform/main.tf'
+  output-path:
+    description: 'Path to write the rendered tfvars file to.'
+    required: false
+    default: 'terraform/variables.tfvars'
+runs:
+  using: 'composite'
+  steps:
+    - name: Render variables.tfvars
+      shell: bash
+      env:
+        ENVIRONMENT: ${{ inputs.environment }}
+        TARGET_JSON: ${{ inputs.target-vars-json }}
+        FALLBACK_PATH: ${{ inputs.fallback-vars-path }}
+        MAIN_TF_PATH: ${{ inputs.main-tf-path }}
+        OUTPUT_PATH: ${{ inputs.output-path }}
+      run: |
+        echo "Generating $OUTPUT_PATH..."
+
+        names=$(sed -n 's/^variable "\([^"]*\)".*/\1/p' "$MAIN_TF_PATH" | grep -vE '^(environment|smtp_url)$')
+
+        fallback_json='{}'
+        if [[ -n "$FALLBACK_PATH" && -f "$FALLBACK_PATH" ]]; then
+          fallback_json="$(cat "$FALLBACK_PATH")"
+        fi
+
+        echo "environment = \"$ENVIRONMENT\"" > "$OUTPUT_PATH"
+
+        while IFS= read -r name; do
+          [[ -z "$name" ]] && continue
+          upper=$(echo "$name" | tr '[:lower:]' '[:upper:]')
+
+          val=$(jq -r --arg k "$upper" '.[$k] // empty' <<<"$TARGET_JSON")
+          if [[ -z "$val" ]]; then
+            val=$(jq -r --arg k "$upper" '.[$k] // empty' <<<"$fallback_json")
+          fi
+
+          if [[ -n "$val" ]]; then
+            escaped_val=$(jq -Rn --arg v "$val" '$v')
+            echo "${name} = ${escaped_val}" >> "$OUTPUT_PATH"
+          fi
+        done <<<"$names"
+
+        echo "✅ Generated $OUTPUT_PATH:"
+        cat "$OUTPUT_PATH"

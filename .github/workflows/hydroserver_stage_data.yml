@@ -1,0 +1,220 @@
+name: Stage HydroServer Data from Source Environment
+run-name: Stage data · ${{ inputs.environment }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Enter an environment to stage data to. All existing data in it will be replaced.'
+        type: environment
+        required: true
+      confirm_environment:
+        description: 'Type the environment name again to confirm.'
+        type: string
+        required: true
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: hydroserver-deploy-${{ inputs.environment }}
+  cancel-in-progress: false
+
+jobs:
+  validate-source-environment:
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.environment }}
+    env:
+      SOURCE_ENVIRONMENT: ${{ vars.SOURCE_ENVIRONMENT }}
+      PREVENT_DATA_DELETION: ${{ vars.PREVENT_DATA_DELETION }}
+    outputs:
+      source_environment: ${{ steps.fetch-source-environment.outputs.source_environment }}
+    steps:
+      - name: Confirm environment
+        shell: bash
+        env:
+          SELECTED_ENVIRONMENT: ${{ inputs.environment }}
+          TYPED_ENVIRONMENT: ${{ inputs.confirm_environment }}
+        run: |
+          if [ "$SELECTED_ENVIRONMENT" != "$TYPED_ENVIRONMENT" ]; then
+            echo "❌ Typed environment '$TYPED_ENVIRONMENT' doesn't match selected environment '$SELECTED_ENVIRONMENT'."
+            exit 1
+          fi
+          echo "✅ Environment confirmed: $SELECTED_ENVIRONMENT"
+
+      - name: Check PREVENT_DATA_DELETION
+        shell: bash
+        run: |
+          if [ "$PREVENT_DATA_DELETION" != "false" ]; then
+            echo "❌ PREVENT_DATA_DELETION is set to '$PREVENT_DATA_DELETION'. Staging data would replace this environment's data. Aborting."
+            exit 1
+          fi
+          echo "✅ PREVENT_DATA_DELETION is false. Proceeding."
+
+      - name: Check source environment
+        shell: bash
+        run: |
+          if [ -z "${SOURCE_ENVIRONMENT}" ]; then
+            echo "SOURCE_ENVIRONMENT is not set. Exiting workflow."
+            exit 1
+          else
+            echo "SOURCE_ENVIRONMENT is set to '${SOURCE_ENVIRONMENT}'."
+          fi
+      - name: Get source environment name
+        id: fetch-source-environment
+        shell: bash
+        run: |
+          echo "source_environment=$SOURCE_ENVIRONMENT" >> $GITHUB_OUTPUT
+
+  load-source-environment:
+    needs: validate-source-environment
+    runs-on: ubuntu-latest
+    environment: ${{ needs.validate-source-environment.outputs.source_environment }}
+    env:
+      AWS_ACCOUNT_ID: ${{ vars.AWS_ACCOUNT_ID }}
+    outputs:
+      source_account_id: ${{ steps.set-source-account-id.outputs.source_account_id }}
+    steps:
+      - name: Collect Source Environment Variables
+        shell: bash
+        env:
+          SOURCE_VARS_JSON: ${{ toJSON(vars) }}
+        run: echo "$SOURCE_VARS_JSON" | jq 'del(.NOTIFICATION_EMAILS)' > source-vars.json
+
+      - name: Upload Variables Artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: source-vars-json
+          path: source-vars.json
+
+      - name: Set Source Account ID Output
+        id: set-source-account-id
+        shell: bash
+        run: |
+          echo "source_account_id=${AWS_ACCOUNT_ID}" >> "$GITHUB_OUTPUT"
+
+  copy-media-bucket:
+    needs: load-source-environment
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.environment }}
+    env:
+      SOURCE_ENVIRONMENT: ${{ vars.SOURCE_ENVIRONMENT }}
+      SOURCE_ACCOUNT_ID: ${{ needs.load-source-environment.outputs.source_account_id }}
+      TARGET_ENVIRONMENT: ${{ github.event.inputs.environment }}
+      TARGET_ACCOUNT_ID: ${{ vars.AWS_ACCOUNT_ID }}
+    steps:
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+          role-duration-seconds: 7200
+
+      - name: Copy S3 Media Objects
+        shell: bash
+        run: |
+          set -e
+          echo "📦 Copying media objects from source bucket to target..."
+
+          SOURCE_BUCKET="s3://hs-media-${SOURCE_ENVIRONMENT}-${SOURCE_ACCOUNT_ID}"
+          TARGET_BUCKET="s3://hs-media-${TARGET_ENVIRONMENT}-${TARGET_ACCOUNT_ID}"
+
+          echo "Source bucket: ${SOURCE_BUCKET}"
+          echo "Target bucket: ${TARGET_BUCKET}"
+
+          if aws s3 ls "${SOURCE_BUCKET}/" --recursive | head -1 | grep -q .; then
+            aws s3 sync "${SOURCE_BUCKET}/" "${TARGET_BUCKET}/"
+            echo "✅ Media bucket data copied successfully."
+          else
+            echo "ℹ️ Source bucket is empty, skipping copy."
+          fi
+
+  restore-database-backup:
+    needs: load-source-environment
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.environment }}
+    env:
+      SOURCE_ENVIRONMENT: ${{ vars.SOURCE_ENVIRONMENT }}
+      TARGET_ENVIRONMENT: ${{ github.event.inputs.environment }}
+      TF_VAR_smtp_url: ${{ secrets.SMTP_URL }}
+    defaults:
+      run:
+        working-directory: ./terraform
+    steps:
+      - name: Checkout Deployment Repository
+        uses: actions/checkout@v7
+
+      - name: Download Source Variables Artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: source-vars-json
+          path: ./terraform/source-vars
+
+      - name: Generate variables.tfvars
+        uses: ./.github/actions/render-tfvars
+        with:
+          environment: ${{ github.event.inputs.environment }}
+          target-vars-json: ${{ toJSON(vars) }}
+          fallback-vars-path: ./terraform/source-vars/source-vars.json
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+          role-duration-seconds: 7200
+
+      - name: Find Latest Source Backup
+        id: snapshot
+        shell: bash
+        run: |
+          set -e
+          SOURCE_INSTANCE="hs-${SOURCE_ENVIRONMENT}"
+          echo "Fetching latest backup for ${SOURCE_INSTANCE}..."
+          SNAPSHOT_ID="$(aws rds describe-db-snapshots \
+            --db-instance-identifier "${SOURCE_INSTANCE}" \
+            --snapshot-type automated \
+            --query 'reverse(sort_by(DBSnapshots[?Status==`available`], &SnapshotCreateTime))[0].DBSnapshotIdentifier' \
+            --output text)"
+
+          if [[ -z "$SNAPSHOT_ID" || "$SNAPSHOT_ID" == "None" ]]; then
+            echo "❌ No backups found for ${SOURCE_INSTANCE}"
+            exit 1
+          fi
+          echo "✅ Using backup ${SNAPSHOT_ID}."
+          echo "snapshot_id=${SNAPSHOT_ID}" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: 1.16.7
+
+      - name: Initialize Terraform
+        run: |
+          terraform init \
+          -backend-config="bucket=${{ vars.TERRAFORM_BUCKET }}" \
+          -backend-config="key=state/hydroserver_${{ github.event.inputs.environment }}/terraform.tfstate" \
+          -backend-config="region=${{ vars.AWS_REGION }}" \
+          -backend-config="use_lockfile=true"
+
+      - name: Restore RDS Backup
+        env:
+          SNAPSHOT_ID: ${{ steps.snapshot.outputs.snapshot_id }}
+        run: |
+          echo "🔄 Replacing hs-${TARGET_ENVIRONMENT} with backup ${SNAPSHOT_ID} from ${SOURCE_ENVIRONMENT}..."
+          terraform apply -auto-approve -no-color -input=false \
+            -var-file=variables.tfvars \
+            -var="rds_restore_snapshot_identifier=${SNAPSHOT_ID}" \
+            -target=aws_db_instance.hydroserver \
+            -replace=aws_db_instance.hydroserver
+          echo "✅ Restore finished."
+
+      - name: Restart HydroServer Services
+        run: |
+          set -e
+          CLUSTER="hs-${TARGET_ENVIRONMENT}"
+          for SERVICE in hs-web-${TARGET_ENVIRONMENT} hs-worker-${TARGET_ENVIRONMENT} hs-scheduler-${TARGET_ENVIRONMENT}; do
+            aws ecs update-service --cluster "$CLUSTER" --service "$SERVICE" --force-new-deployment >/dev/null
+            echo "🔄 Restarted ${SERVICE}."
+          done

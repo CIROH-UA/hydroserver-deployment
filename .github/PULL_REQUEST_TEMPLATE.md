@@ -33,31 +33,16 @@
 - [ ] Changes are limited to a single goal (no scope creep)
 - [ ] Code can be automatically merged (no conflicts)
 - [ ] Code follows project standards (link if applicable)
-- [ ] Passes all existing automated tests
-- [ ] Any _change_ in functionality is tested
-- [ ] New functions are documented (with a description, list of inputs, and expected output)
 - [ ] Placeholder code is flagged / future todos are captured in comments
-- [ ] Visually tested in supported browsers and devices (see checklist below :point_down:)
 - [ ] Project documentation has been updated (including the "Unreleased" section of the CHANGELOG)
 - [ ] Reviewers requested with the [Reviewers tool](https://help.github.com/articles/requesting-a-pull-request-review/) :arrow_right:
 
-## Testing checklist
+## Deployment checklist
 
-### Target Environment support
-
-- [ ] Windows
-- [ ] Linux
-- [ ] Browser
-
-### Accessibility
-
-- [ ] Keyboard friendly
-- [ ] Screen reader friendly
-
-### Other
-
-- [ ] Is useable without CSS
-- [ ] Is useable without JS
-- [ ] Flexible from small to large screens
-- [ ] No linting errors or warnings
-- [ ] JavaScript tests are passing
+- [ ] *Validate Terraform* check passes
+- [ ] Ran *Apply HydroServer Deployment* in `plan` mode on a dev environment, and the plan shows only the expected
+      changes (link the run)
+- [ ] Applied to a dev environment, and HydroServer is running
+- [ ] New GitHub environment variables are documented in the README or INSTALL, with defaults in `terraform/main.tf`
+- [ ] `iam/terraform-deployer-policy.json` is updated if new AWS permissions are needed
+- [ ] No secrets, account IDs, or environment-specific values are committed

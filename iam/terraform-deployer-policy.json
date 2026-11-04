@@ -1,0 +1,254 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "TerraformState",
+      "Effect": "Allow",
+      "Action": ["s3:ListBucket", "s3:GetObject", "s3:PutObject", "s3:DeleteObject"],
+      "Resource": ["arn:aws:s3:::<TERRAFORM_BUCKET>", "arn:aws:s3:::<TERRAFORM_BUCKET>/*"]
+    },
+    {
+      "Sid": "UnscopedResources",
+      "Effect": "Allow",
+      "Action": [
+        "ec2:Describe*",
+        "ec2:GetManagedPrefixListEntries",
+        "ecs:DescribeTaskDefinition",
+        "ecs:ListTaskDefinitions",
+        "ecs:RegisterTaskDefinition",
+        "ecs:DeregisterTaskDefinition",
+        "ecs:TagResource",
+        "ecr:GetAuthorizationToken",
+        "elasticloadbalancing:Describe*",
+        "rds:Describe*",
+        "rds:ListTagsForResource",
+        "elasticache:Describe*",
+        "elasticache:ListTagsForResource",
+        "application-autoscaling:*",
+        "cloudwatch:DescribeAlarms",
+        "cloudwatch:ListTagsForResource",
+        "logs:DescribeLogGroups",
+        "logs:ListTagsForResource",
+        "logs:ListTagsLogGroup",
+        "logs:CreateLogDelivery",
+        "logs:GetLogDelivery",
+        "logs:UpdateLogDelivery",
+        "logs:DeleteLogDelivery",
+        "logs:ListLogDeliveries",
+        "logs:PutResourcePolicy",
+        "logs:DescribeResourcePolicies",
+        "secretsmanager:ListSecrets",
+        "sns:ListTopics",
+        "events:ListRules",
+        "route53:CreateHealthCheck",
+        "route53:GetHealthCheck",
+        "route53:UpdateHealthCheck",
+        "route53:DeleteHealthCheck",
+        "route53:ChangeTagsForResource",
+        "route53:ListTagsForResource",
+        "cloudfront:*",
+        "wafv2:*",
+        "kms:DescribeKey",
+        "kms:ListAliases",
+        "iam:GetRole",
+        "iam:ListRoles"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "Network",
+      "Effect": "Allow",
+      "Action": [
+        "ec2:CreateVpc",
+        "ec2:DeleteVpc",
+        "ec2:ModifyVpcAttribute",
+        "ec2:CreateSubnet",
+        "ec2:DeleteSubnet",
+        "ec2:ModifySubnetAttribute",
+        "ec2:CreateInternetGateway",
+        "ec2:DeleteInternetGateway",
+        "ec2:AttachInternetGateway",
+        "ec2:DetachInternetGateway",
+        "ec2:CreateRouteTable",
+        "ec2:DeleteRouteTable",
+        "ec2:CreateRoute",
+        "ec2:DeleteRoute",
+        "ec2:ReplaceRoute",
+        "ec2:AssociateRouteTable",
+        "ec2:DisassociateRouteTable",
+        "ec2:CreateSecurityGroup",
+        "ec2:DeleteSecurityGroup",
+        "ec2:AuthorizeSecurityGroupIngress",
+        "ec2:AuthorizeSecurityGroupEgress",
+        "ec2:RevokeSecurityGroupIngress",
+        "ec2:RevokeSecurityGroupEgress",
+        "ec2:ModifySecurityGroupRules",
+        "ec2:UpdateSecurityGroupRuleDescriptionsIngress",
+        "ec2:UpdateSecurityGroupRuleDescriptionsEgress",
+        "ec2:CreateTags",
+        "ec2:DeleteTags"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "ContainerRegistry",
+      "Effect": "Allow",
+      "Action": "ecr:*",
+      "Resource": "arn:aws:ecr:*:<ACCOUNT_ID>:repository/hs-*"
+    },
+    {
+      "Sid": "ContainerServices",
+      "Effect": "Allow",
+      "Action": "ecs:*",
+      "Resource": [
+        "arn:aws:ecs:*:<ACCOUNT_ID>:cluster/hs-*",
+        "arn:aws:ecs:*:<ACCOUNT_ID>:service/hs-*/*",
+        "arn:aws:ecs:*:<ACCOUNT_ID>:task/hs-*/*",
+        "arn:aws:ecs:*:<ACCOUNT_ID>:task-definition/hs-*:*"
+      ]
+    },
+    {
+      "Sid": "LoadBalancer",
+      "Effect": "Allow",
+      "Action": "elasticloadbalancing:*",
+      "Resource": [
+        "arn:aws:elasticloadbalancing:*:<ACCOUNT_ID>:loadbalancer/app/hs-*/*",
+        "arn:aws:elasticloadbalancing:*:<ACCOUNT_ID>:targetgroup/hs-*/*",
+        "arn:aws:elasticloadbalancing:*:<ACCOUNT_ID>:listener/app/hs-*/*/*",
+        "arn:aws:elasticloadbalancing:*:<ACCOUNT_ID>:listener-rule/app/hs-*/*/*/*"
+      ]
+    },
+    {
+      "Sid": "Database",
+      "Effect": "Allow",
+      "Action": "rds:*",
+      "Resource": [
+        "arn:aws:rds:*:<ACCOUNT_ID>:db:hs-*",
+        "arn:aws:rds:*:<ACCOUNT_ID>:subgrp:hs-*",
+        "arn:aws:rds:*:<ACCOUNT_ID>:pg:hs-*",
+        "arn:aws:rds:*:<ACCOUNT_ID>:og:default:*",
+        "arn:aws:rds:*:<ACCOUNT_ID>:snapshot:hs-*",
+        "arn:aws:rds:*:<ACCOUNT_ID>:snapshot:rds:hs-*"
+      ]
+    },
+    {
+      "Sid": "Cache",
+      "Effect": "Allow",
+      "Action": "elasticache:*",
+      "Resource": [
+        "arn:aws:elasticache:*:<ACCOUNT_ID>:replicationgroup:hs-*",
+        "arn:aws:elasticache:*:<ACCOUNT_ID>:cluster:hs-*",
+        "arn:aws:elasticache:*:<ACCOUNT_ID>:subnetgroup:hs-*",
+        "arn:aws:elasticache:*:<ACCOUNT_ID>:parametergroup:default.*",
+        "arn:aws:elasticache:*:<ACCOUNT_ID>:user:default"
+      ]
+    },
+    {
+      "Sid": "Buckets",
+      "Effect": "Allow",
+      "Action": "s3:*",
+      "Resource": [
+        "arn:aws:s3:::hs-static-*",
+        "arn:aws:s3:::hs-static-*/*",
+        "arn:aws:s3:::hs-media-*",
+        "arn:aws:s3:::hs-media-*/*"
+      ]
+    },
+    {
+      "Sid": "Secrets",
+      "Effect": "Allow",
+      "Action": "secretsmanager:*",
+      "Resource": "arn:aws:secretsmanager:*:<ACCOUNT_ID>:secret:hs-*"
+    },
+    {
+      "Sid": "Logs",
+      "Effect": "Allow",
+      "Action": "logs:*",
+      "Resource": [
+        "arn:aws:logs:*:<ACCOUNT_ID>:log-group:/ecs/hs-*",
+        "arn:aws:logs:*:<ACCOUNT_ID>:log-group:/ecs/hs-*:*",
+        "arn:aws:logs:*:<ACCOUNT_ID>:log-group:aws-waf-logs-hs-*",
+        "arn:aws:logs:*:<ACCOUNT_ID>:log-group:aws-waf-logs-hs-*:*"
+      ]
+    },
+    {
+      "Sid": "Monitoring",
+      "Effect": "Allow",
+      "Action": ["cloudwatch:*", "sns:*", "events:*"],
+      "Resource": [
+        "arn:aws:cloudwatch:*:<ACCOUNT_ID>:alarm:hs-*",
+        "arn:aws:sns:*:<ACCOUNT_ID>:hs-*",
+        "arn:aws:events:*:<ACCOUNT_ID>:rule/hs-*"
+      ]
+    },
+    {
+      "Sid": "Roles",
+      "Effect": "Allow",
+      "Action": [
+        "iam:CreateRole",
+        "iam:DeleteRole",
+        "iam:TagRole",
+        "iam:UntagRole",
+        "iam:UpdateRole",
+        "iam:UpdateRoleDescription",
+        "iam:UpdateAssumeRolePolicy",
+        "iam:PutRolePolicy",
+        "iam:GetRolePolicy",
+        "iam:DeleteRolePolicy",
+        "iam:ListRolePolicies",
+        "iam:ListAttachedRolePolicies",
+        "iam:ListInstanceProfilesForRole",
+        "iam:PutRolePermissionsBoundary",
+        "iam:DeleteRolePermissionsBoundary"
+      ],
+      "Resource": "arn:aws:iam::<ACCOUNT_ID>:role/hs-*"
+    },
+    {
+      "Sid": "RoleManagedPolicies",
+      "Effect": "Allow",
+      "Action": ["iam:AttachRolePolicy", "iam:DetachRolePolicy"],
+      "Resource": "arn:aws:iam::<ACCOUNT_ID>:role/hs-*",
+      "Condition": {
+        "ArnEquals": {
+          "iam:PolicyARN": "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
+        }
+      }
+    },
+    {
+      "Sid": "PassRolesToEcs",
+      "Effect": "Allow",
+      "Action": "iam:PassRole",
+      "Resource": "arn:aws:iam::<ACCOUNT_ID>:role/hs-*",
+      "Condition": {
+        "StringEquals": { "iam:PassedToService": "ecs-tasks.amazonaws.com" }
+      }
+    },
+    {
+      "Sid": "ServiceLinkedRoles",
+      "Effect": "Allow",
+      "Action": "iam:CreateServiceLinkedRole",
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": {
+          "iam:AWSServiceName": [
+            "ecs.amazonaws.com",
+            "ecs.application-autoscaling.amazonaws.com",
+            "elasticloadbalancing.amazonaws.com",
+            "rds.amazonaws.com",
+            "elasticache.amazonaws.com",
+            "vpcorigin.cloudfront.amazonaws.com"
+          ]
+        }
+      }
+    },
+    {
+      "Sid": "EncryptedStorageGrants",
+      "Effect": "Allow",
+      "Action": "kms:CreateGrant",
+      "Resource": "*",
+      "Condition": {
+        "Bool": { "kms:GrantIsForAWSResource": "true" }
+      }
+    }
+  ]
+}

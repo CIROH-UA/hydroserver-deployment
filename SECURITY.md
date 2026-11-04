@@ -8,20 +8,26 @@ The public repositories MUST NOT leak any valid private credential (e.g., a work
 
 ## Supported Versions
 
-Use this section to tell people about which versions of your project are
-currently being supported with security updates.
+This project is in beta and doesn't publish maintained release branches. Security fixes are made on the `main`
+branch only. Deployments should run the latest workflows and Terraform configuration from `main`.
 
-| Version | Supported          |
-| ------- | ------------------ |
-| 5.1.x   | :white_check_mark: |
-| 5.0.x   | :x:                |
-| 4.0.x   | :white_check_mark: |
-| < 4.0   | :x:                |
+This repository deploys HydroServer but doesn't contain HydroServer's source code. Which HydroServer release a
+deployment runs is set by its **HYDROSERVER_VERSION** variable, so keep that up to date with
+[HydroServer releases](https://github.com/hydroserver2/hydroserver/releases) as well.
 
 ## Reporting a Vulnerability
 
-Use this section to tell people how to report a vulnerability.
+Don't report security vulnerabilities in public issues, pull requests, or discussions.
 
-Tell them where to go, how often they can expect to get an update on a
-reported vulnerability, what to expect if the vulnerability is accepted or
-declined, etc.
+Report them privately using GitHub's
+[private vulnerability reporting](https://docs.github.com/en/code-security/security-advisories/guidance-on-reporting-and-writing-information-about-vulnerabilities/privately-reporting-a-security-vulnerability):
+open this repository's **Security** tab and select **Report a vulnerability**. Include the affected workflow or
+Terraform file, the steps to reproduce the issue, and its impact. Don't include working credentials, AWS account IDs,
+or other details about a specific deployment.
+
+Maintainers will acknowledge the report, investigate it, and keep you updated through the private advisory. If the
+report is accepted, the fix is released on `main` and the advisory is published once deployments have had a chance to
+update. If it's declined, the advisory explains why.
+
+Vulnerabilities in HydroServer itself (rather than in how this repository deploys it) should be reported to the
+[HydroServer project](https://github.com/hydroserver2/hydroserver) instead.
