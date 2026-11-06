@@ -125,14 +125,18 @@ runs on are configured.
      *Default*: `True`
 
    - **API_RATE_LIMITS**
-     Controls HydroServer's API rate limits. Set to `False` to disable rate limiting entirely, or to a JSON
-     object to override specific per-view rate limits.
-     *Default*: `False`
+     Limits how many API requests a client can make, as a JSON object with an `anonymous` rate (per client) and an
+     `authenticated` rate (per user). Rates are `<count>/<period>`, where the period is `s`, `m`, `h` or `d`. Leave
+     out a key to not limit that kind of client, or set the whole value to `false` to turn API rate limiting off.
+     These limits apply on top of **WAF_RATE_LIMIT**, so raise `authenticated` if data loaders post more often.
+     *Default*: `{"anonymous": "300/m", "authenticated": "1000/m"}`
 
    - **ACCOUNT_RATE_LIMITS**
-     Controls HydroServer's account rate limits. Set to `False` to disable rate limiting entirely, or to a JSON
-     object to override specific per-view rate limits.
-     *Default*: `False`
+     Limits sign-in, signup, password reset and verification email attempts, as a JSON object of
+     [django-allauth rate limits](https://docs.allauth.org/en/latest/account/rate_limits.html). `{}` uses
+     allauth's defaults, and any keys you set override them (e.g. `{"login_failed": "5/m/ip"}`). Set to `false` to
+     turn account rate limiting off.
+     *Default*: `{}`
 
    - **RDS_INSTANCE_CLASS**
      The instance class used for HydroServer's RDS database, which sets its vCPUs and memory. See

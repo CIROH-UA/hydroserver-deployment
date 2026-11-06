@@ -171,15 +171,25 @@ variable "smtp_url" {
 }
 
 variable "api_rate_limits" {
-  description = "Controls HydroServer's API rate limits. Set to False to disable rate limiting, or a JSON object to override specific per-view rate limits."
+  description = "HydroServer's API rate limits, as a JSON object with \"anonymous\" and/or \"authenticated\" rates (e.g. \"300/m\"). Set to false to disable."
   type        = string
-  default     = "False"
+  default     = "{\"anonymous\": \"300/m\", \"authenticated\": \"1000/m\"}"
+
+  validation {
+    condition     = can(keys(jsondecode(var.api_rate_limits))) || try(jsondecode(var.api_rate_limits) == false, false)
+    error_message = "API_RATE_LIMITS must be a JSON object (e.g. {\"anonymous\": \"300/m\"}) or false (lowercase)."
+  }
 }
 
 variable "account_rate_limits" {
-  description = "Controls HydroServer's account rate limits. Set to False to disable rate limiting, or a JSON object to override specific per-view rate limits."
+  description = "HydroServer's account rate limits, as a JSON object of django-allauth ACCOUNT_RATE_LIMITS overrides. {} uses allauth's defaults; false disables them."
   type        = string
-  default     = "False"
+  default     = "{}"
+
+  validation {
+    condition     = can(keys(jsondecode(var.account_rate_limits))) || try(jsondecode(var.account_rate_limits) == false, false)
+    error_message = "ACCOUNT_RATE_LIMITS must be a JSON object (e.g. {} or {\"login_failed\": \"5/m/ip\"}) or false (lowercase)."
+  }
 }
 
 variable "gunicorn_workers" {
