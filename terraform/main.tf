@@ -28,6 +28,7 @@ provider "aws" {
 
   default_tags {
     tags = {
+      "Project"                 = var.aws_project_tag
       "hydroserver:environment" = var.environment
       "hydroserver:managed-by"  = "terraform"
     }
@@ -88,6 +89,17 @@ variable "iam_permissions_boundary_arn" {
   description = "The ARN of an IAM permissions boundary to attach to the IAM roles Terraform creates. Leave empty for none."
   type        = string
   default     = ""
+}
+
+variable "aws_project_tag" {
+  description = "Value of the Project tag applied to every taggable resource."
+  type        = string
+  default     = "hydroserver"
+
+  validation {
+    condition     = can(regex("^[\\p{L}\\p{Z}\\p{N}_.:/=+\\-@]{1,256}$", var.aws_project_tag))
+    error_message = "aws_project_tag must be 1-256 characters: letters, numbers, spaces, and _ . : / = + - @"
+  }
 }
 
 

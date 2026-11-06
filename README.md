@@ -319,6 +319,11 @@ runs on are configured.
      other common attacks) with `403 Forbidden`. When set to `false`, WAF only logs the requests it would block.
      *Default*: `true`
 
+   - **AWS_PROJECT_TAG**
+     The value of the `Project` tag added to every AWS resource Terraform creates that supports tags, and to the ECS
+     tasks the workflows start. Useful for cost allocation and organization tag policies.
+     *Default*: `hydroserver`
+
 ## Usage
 
 ### HydroServer Terraform Apply Workflow

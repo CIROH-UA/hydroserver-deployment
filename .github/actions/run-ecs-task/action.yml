@@ -54,6 +54,7 @@ runs:
           --network-configuration "$NETWORK" \
           --overrides "$OVERRIDES" \
           --started-by "github-${GITHUB_RUN_ID}" \
+          --propagate-tags TASK_DEFINITION \
           --query 'tasks[0].taskArn' \
           --output text)"
         if [[ -z "$TASK_ARN" || "$TASK_ARN" == "None" ]]; then
