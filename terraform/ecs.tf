@@ -386,5 +386,5 @@ resource "aws_secretsmanager_secret" "hydroserver_smtp_url" {
 
 resource "aws_secretsmanager_secret_version" "hydroserver_smtp_url_version" {
   secret_id     = aws_secretsmanager_secret.hydroserver_smtp_url.id
-  secret_string = var.smtp_url
+  secret_string = var.smtp_url != "" ? var.smtp_url : "smtp://127.0.0.1:1025"
 }

@@ -79,6 +79,8 @@ deployment, the full list of [configuration settings](README.md#configuration), 
    will use, and complete its DNS validation. CloudFront only uses certificates from us-east-1. If HydroServer will be
    deployed in a different region, request a second certificate for the same domain in that region for the load
    balancer.
+   - Choose **RSA 2048** or **ECDSA P 256** as the key algorithm. The load balancer doesn't accept larger RSA keys.
+   - The certificate must be **Issued** before the first deployment.
 4. Create an **IAM OIDC identity provider** to connect GitHub Actions to the AWS account. This only needs to be done
    once per account.
    ```
@@ -107,17 +109,26 @@ deployment, the full list of [configuration settings](README.md#configuration), 
          "StringEquals": {
            "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
            "token.actions.githubusercontent.com:sub": [
-             "repo:CIROH-UA/hydroserver-deployment:environment:dev",
-             "repo:CIROH-UA/hydroserver-deployment:environment:test",
-             "repo:CIROH-UA/hydroserver-deployment:environment:prod"
+             "repo:CIROH-UA@119541160/hydroserver-deployment@1444965402:environment:dev",
+             "repo:CIROH-UA@119541160/hydroserver-deployment@1444965402:environment:test",
+             "repo:CIROH-UA@119541160/hydroserver-deployment@1444965402:environment:prod"
            ]
          }
        }
      }]
    }
    ```
+   The `sub` values must match GitHub's token exactly, including case. GitHub includes the organization and
+   repository IDs in the subject (`<org>@<org-id>/<repo>@<repo-id>`) for this repository. A fork or a repository in
+   another organization has different IDs, or may use the shorter `repo:<org>/<repo>:environment:<name>` format. If
+   a workflow fails with `Not authorized to perform sts:AssumeRoleWithWebIdentity`, find the failed
+   `AssumeRoleWithWebIdentity` event in CloudTrail *Event history* (in **AWS_REGION**). Its `userIdentity` shows the
+   subject GitHub sent, which you can copy into the trust policy.
+
    Then create the role and attach the policy from *Step 5*. Some workflows run for more than an hour, so the role's
-   maximum session duration is two hours.
+   maximum session duration is two hours. If you create the role in the AWS console instead, choose
+   *Custom trust policy*, and after creating it, edit the role's *Maximum session duration* to 2 hours. Otherwise
+   workflows fail with `The requested DurationSeconds exceeds the MaxSessionDuration set for this role`.
    ```
    aws iam create-role --role-name hydroserver-terraform \
      --assume-role-policy-document file://trust-policy.json --max-session-duration 7200

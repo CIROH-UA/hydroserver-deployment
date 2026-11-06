@@ -144,6 +144,12 @@
       ]
     },
     {
+      "Sid": "CacheParameterGroups",
+      "Effect": "Allow",
+      "Action": ["elasticache:CreateReplicationGroup", "elasticache:ModifyReplicationGroup"],
+      "Resource": "arn:aws:elasticache:*:<ACCOUNT_ID>:parametergroup:*"
+    },
+    {
       "Sid": "Buckets",
       "Effect": "Allow",
       "Action": "s3:*",
