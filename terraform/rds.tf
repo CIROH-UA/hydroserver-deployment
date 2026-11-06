@@ -97,7 +97,7 @@ resource "random_password" "hydroserver_secret_key" {
   upper            = true
   lower            = true
   numeric          = true
-  override_special = "!@#$%^&*()-_=+{}[]|:;\"'<>,.?/"
+  override_special = "!@#%^&*()-_=+{}[]|:;\"'<>,.?/"
 }
 
 locals {

@@ -103,6 +103,8 @@
       "Resource": [
         "arn:aws:ecs:*:<ACCOUNT_ID>:cluster/hs-*",
         "arn:aws:ecs:*:<ACCOUNT_ID>:service/hs-*/*",
+        "arn:aws:ecs:*:<ACCOUNT_ID>:service-deployment/hs-*/*/*",
+        "arn:aws:ecs:*:<ACCOUNT_ID>:service-revision/hs-*/*/*",
         "arn:aws:ecs:*:<ACCOUNT_ID>:task/hs-*/*",
         "arn:aws:ecs:*:<ACCOUNT_ID>:task-definition/hs-*:*"
       ]
