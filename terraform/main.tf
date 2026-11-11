@@ -58,12 +58,18 @@ variable "aws_region" {
 }
 
 variable "hydroserver_version" {
-  description = "The HydroServer release tag to deploy (e.g. v1.5.0)."
+  description = "The HydroServer release tag to deploy (e.g. v2.0.0). Its major version must match hydroserver_supported_major in hydroserver_version.tf."
   type        = string
 
   validation {
     condition     = trimspace(var.hydroserver_version) != "" && lower(var.hydroserver_version) != "latest"
-    error_message = "Set HYDROSERVER_VERSION to a specific HydroServer release tag, such as v1.5.0. 'latest' isn't allowed."
+    error_message = "Set HYDROSERVER_VERSION to a specific HydroServer release tag, such as v2.0.0. 'latest' isn't allowed."
+  }
+
+  # TODO: Remove with hydroserver_version.tf after all environments are on v2.
+  validation {
+    condition     = try(tonumber(regex("^v?(\\d+)\\.", trimspace(var.hydroserver_version))[0]), -1) == local.hydroserver_supported_major
+    error_message = "This branch deploys HydroServer v${local.hydroserver_supported_major}.x, but HYDROSERVER_VERSION is a different major version or isn't a release tag. Run the workflow from the branch that matches HYDROSERVER_VERSION, or change HYDROSERVER_VERSION."
   }
 }
 

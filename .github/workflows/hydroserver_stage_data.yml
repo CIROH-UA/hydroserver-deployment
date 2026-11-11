@@ -12,6 +12,11 @@ on:
         description: 'Type the environment name again to confirm.'
         type: string
         required: true
+      snapshot_identifier:
+        description: 'Optional: restore this RDS snapshot (name must start with "hs-") instead of the source environment''s latest backup. Media files aren''t copied.'
+        type: string
+        required: false
+        default: ''
 
 permissions:
   contents: read
@@ -28,6 +33,7 @@ jobs:
     env:
       SOURCE_ENVIRONMENT: ${{ vars.SOURCE_ENVIRONMENT }}
       PREVENT_DATA_DELETION: ${{ vars.PREVENT_DATA_DELETION }}
+      SNAPSHOT_IDENTIFIER: ${{ inputs.snapshot_identifier }}
     outputs:
       source_environment: ${{ steps.fetch-source-environment.outputs.source_environment }}
     steps:
@@ -52,7 +58,20 @@ jobs:
           fi
           echo "✅ PREVENT_DATA_DELETION is false. Proceeding."
 
+      - name: Check snapshot identifier
+        if: inputs.snapshot_identifier != ''
+        shell: bash
+        run: |
+          if [[ ! "$SNAPSHOT_IDENTIFIER" =~ ^hs-[A-Za-z0-9-]+$ ]]; then
+            echo "❌ Snapshot '$SNAPSHOT_IDENTIFIER' must start with 'hs-' and contain only letters, numbers, and hyphens."
+            echo "   The deployer role can only restore snapshots named hs-*. Copy the snapshot to a matching name with"
+            echo "   'aws rds copy-db-snapshot' and try again."
+            exit 1
+          fi
+          echo "✅ Restoring snapshot '$SNAPSHOT_IDENTIFIER'. SOURCE_ENVIRONMENT is ignored and media files won't be copied."
+
       - name: Check source environment
+        if: inputs.snapshot_identifier == ''
         shell: bash
         run: |
           if [ -z "${SOURCE_ENVIRONMENT}" ]; then
@@ -63,12 +82,14 @@ jobs:
           fi
       - name: Get source environment name
         id: fetch-source-environment
+        if: inputs.snapshot_identifier == ''
         shell: bash
         run: |
           echo "source_environment=$SOURCE_ENVIRONMENT" >> $GITHUB_OUTPUT
 
   load-source-environment:
     needs: validate-source-environment
+    if: needs.validate-source-environment.outputs.source_environment != ''
     runs-on: ubuntu-latest
     environment: ${{ needs.validate-source-environment.outputs.source_environment }}
     env:
@@ -95,11 +116,11 @@ jobs:
           echo "source_account_id=${AWS_ACCOUNT_ID}" >> "$GITHUB_OUTPUT"
 
   copy-media-bucket:
-    needs: load-source-environment
+    needs: [validate-source-environment, load-source-environment]
     runs-on: ubuntu-latest
     environment: ${{ github.event.inputs.environment }}
     env:
-      SOURCE_ENVIRONMENT: ${{ vars.SOURCE_ENVIRONMENT }}
+      SOURCE_ENVIRONMENT: ${{ needs.validate-source-environment.outputs.source_environment }}
       SOURCE_ACCOUNT_ID: ${{ needs.load-source-environment.outputs.source_account_id }}
       TARGET_ENVIRONMENT: ${{ github.event.inputs.environment }}
       TARGET_ACCOUNT_ID: ${{ vars.AWS_ACCOUNT_ID }}
@@ -131,11 +152,16 @@ jobs:
           fi
 
   restore-database-backup:
-    needs: load-source-environment
+    needs: [validate-source-environment, load-source-environment]
+    if: >
+      !cancelled() &&
+      needs.validate-source-environment.result == 'success' &&
+      (needs.load-source-environment.result == 'success' || needs.load-source-environment.result == 'skipped')
     runs-on: ubuntu-latest
     environment: ${{ github.event.inputs.environment }}
     env:
-      SOURCE_ENVIRONMENT: ${{ vars.SOURCE_ENVIRONMENT }}
+      SOURCE_ENVIRONMENT: ${{ needs.validate-source-environment.outputs.source_environment }}
+      SNAPSHOT_IDENTIFIER: ${{ inputs.snapshot_identifier }}
       TARGET_ENVIRONMENT: ${{ github.event.inputs.environment }}
       TF_VAR_smtp_url: ${{ secrets.SMTP_URL }}
     defaults:
@@ -146,6 +172,7 @@ jobs:
         uses: actions/checkout@v7
 
       - name: Download Source Variables Artifact
+        if: needs.load-source-environment.result == 'success'
         uses: actions/download-artifact@v8
         with:
           name: source-vars-json
@@ -165,11 +192,29 @@ jobs:
           aws-region: ${{ vars.AWS_REGION }}
           role-duration-seconds: 7200
 
-      - name: Find Latest Source Backup
+      - name: Find Snapshot to Restore
         id: snapshot
         shell: bash
         run: |
           set -e
+          if [[ -n "$SNAPSHOT_IDENTIFIER" ]]; then
+            echo "Checking snapshot ${SNAPSHOT_IDENTIFIER}..."
+            if ! STATUS="$(aws rds describe-db-snapshots \
+              --db-snapshot-identifier "${SNAPSHOT_IDENTIFIER}" \
+              --query 'DBSnapshots[0].Status' \
+              --output text)"; then
+              echo "❌ Snapshot ${SNAPSHOT_IDENTIFIER} wasn't found in this account and region."
+              exit 1
+            fi
+            if [[ "$STATUS" != "available" ]]; then
+              echo "❌ Snapshot ${SNAPSHOT_IDENTIFIER} is '${STATUS}', not 'available'. Wait for it to finish and try again."
+              exit 1
+            fi
+            echo "✅ Using snapshot ${SNAPSHOT_IDENTIFIER}."
+            echo "snapshot_id=${SNAPSHOT_IDENTIFIER}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
           SOURCE_INSTANCE="hs-${SOURCE_ENVIRONMENT}"
           echo "Fetching latest backup for ${SOURCE_INSTANCE}..."
           SNAPSHOT_ID="$(aws rds describe-db-snapshots \
@@ -202,7 +247,7 @@ jobs:
         env:
           SNAPSHOT_ID: ${{ steps.snapshot.outputs.snapshot_id }}
         run: |
-          echo "🔄 Replacing hs-${TARGET_ENVIRONMENT} with backup ${SNAPSHOT_ID} from ${SOURCE_ENVIRONMENT}..."
+          echo "🔄 Replacing hs-${TARGET_ENVIRONMENT} with snapshot ${SNAPSHOT_ID}${SOURCE_ENVIRONMENT:+ from ${SOURCE_ENVIRONMENT}}..."
           terraform apply -auto-approve -no-color -input=false \
             -var-file=variables.tfvars \
             -var="rds_restore_snapshot_identifier=${SNAPSHOT_ID}" \

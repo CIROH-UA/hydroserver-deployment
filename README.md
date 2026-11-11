@@ -357,6 +357,21 @@ environment since the plan was made. In those cases, run a new plan.
 If a new web service version doesn't pass its health checks, ECS rolls back to the previous version and the apply
 fails.
 
+### HydroServer v1 and v2
+
+<!--
+TODO: Remove v1 support after all environments are on v2:
+- Delete the v1 branch and this section, and the v1 note under HYDROSERVER_VERSION in INSTALL.
+- Move the values in terraform/hydroserver_version.tf back into ecs.tf and s3.tf, and delete the file.
+- Remove the major version check on hydroserver_version in terraform/main.tf.
+-->
+
+`main` deploys HydroServer v2 releases, and the temporary `v1` branch deploys v1 releases. Run the workflows from
+the branch that matches the environment's **HYDROSERVER_VERSION**. Otherwise they fail without changing anything.
+
+To upgrade an environment to v2, set **HYDROSERVER_VERSION** to a v2 release, then plan and apply from `main` with
+*migrate* checked. This can't be undone on the same database.
+
 ### Run HydroServer Setup Commands
 
 The *Apply HydroServer Deployment* workflow runs `migrate` and `collectstatic` after each apply. To run them again
@@ -419,7 +434,8 @@ requests without a User-Agent (`NoUserAgent_HEADER`), and script-like text in re
 ### Stage Data to a HydroServer Deployment
 
 1. Add a variable called **SOURCE_ENVIRONMENT** to the target environment’s GitHub environment, with the source
-   environment name as its value. The source environment must be in the same AWS account.
+   environment name as its value. The source environment must be in the same AWS account. This isn't needed when
+   restoring a specific snapshot (see below).
 2. Ensure **PREVENT_DATA_DELETION** in the target environment is set to `false`. The workflow will not run
    otherwise.
 3. Run the *Stage HydroServer Data from Source Environment* workflow. Select the target environment, then type its
@@ -432,6 +448,11 @@ restored from the source's latest backup. It keeps the same name and address, an
 password on it, so HydroServer reconnects without configuration changes. The target is unavailable while the
 database is replaced (usually 10–20 minutes), and the workflow restarts the web, worker, and scheduler services
 afterward. The replacement is applied directly, without the plan and review steps.
+
+To restore a specific RDS snapshot instead, enter its name in *snapshot_identifier*. **SOURCE_ENVIRONMENT** isn't
+needed, and media files aren't copied. The snapshot must be `available`, in the same account and region, and named
+`hs-*`. It must also match what HydroServer expects: master user `hsdbadmin`, database `hydroserver`, encrypted, and
+the same PostgreSQL major version as **RDS_ENGINE_VERSION**.
 
 ### Teardown a HydroServer Deployment
 

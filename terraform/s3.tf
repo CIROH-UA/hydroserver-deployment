@@ -45,7 +45,7 @@ resource "aws_s3_bucket_ownership_controls" "hydroserver_media_bucket" {
   bucket = aws_s3_bucket.hydroserver_media_bucket.id
 
   rule {
-    object_ownership = "BucketOwnerEnforced"
+    object_ownership = local.hydroserver_media_object_ownership
   }
 }
 

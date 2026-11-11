@@ -25,6 +25,8 @@ deployment, the full list of [configuration settings](README.md#configuration), 
      This variable is required, and `latest` isn't allowed. To deploy a new release, change this value and rerun the
      *Apply HydroServer Deployment* workflow.
      *Example*: `v2.0.0`
+     <!-- TODO: Remove after all environments are on v2. See "HydroServer v1 and v2" in README. -->
+     Deploy v1 releases from the `v1` branch, and v2 releases from `main`.
 
      *WARNING*: Don't deploy prerelease builds (e.g., `v2.0.0b7`) to production instances. These builds are meant to
      be used for dev and test instances and may break Django's database migration history.
